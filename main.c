@@ -48,16 +48,13 @@ void isoDiffusionDenoising(image *inImage, image *outImage, float kappa, int ite
         }
         memcpy(inImage->data[0], outImage->data[0], inImage->height * inImage->width * sizeof(float));
         if(myRank > 0) {
-            MPI_Send(inImage->data[1], inImage->width, MPI_FLOAT, myRank - 1, 0, MPI_COMM_WORLD);
+            MPI_Send(outImage->data[1], inImage->width, MPI_FLOAT, myRank - 1, 0, MPI_COMM_WORLD);
             MPI_Recv(inImage->data[0], inImage->width, MPI_FLOAT, myRank - 1, 0, MPI_COMM_WORLD, &status);
         }
         if(myRank < numProcs - 1) {
-            MPI_Send(inImage->data[inImage->height - 2], inImage->width, MPI_FLOAT, myRank + 1, 0, MPI_COMM_WORLD);
+            MPI_Send(outImage->data[inImage->height - 2], inImage->width, MPI_FLOAT, myRank + 1, 0, MPI_COMM_WORLD);
             MPI_Recv(inImage->data[inImage->height - 1], inImage->width, MPI_FLOAT, myRank + 1, 0, MPI_COMM_WORLD, &status);
         }
-        MPI_Barrier(MPI_COMM_WORLD);
-        printf("Iteration %d\n",iteration);
-        fflush(stdout);
     }
 }
 
@@ -87,8 +84,8 @@ int main(int argc, char** argv)
     MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
     MPI_Comm_size(MPI_COMM_WORLD, &numProcs);
 
+    import_JPEG_file(inFileName, &imageChars, &mainImageHeight, &mainImageWidth, &numComponents);
     if(myRank == 0) {
-        import_JPEG_file(inFileName, &imageChars, &mainImageHeight, &mainImageWidth, &numComponents);
         allocateImage(&mainImage, mainImageHeight, mainImageWidth);
         // load the data into the image
         for(i = 0; i < mainImage.height; i++) {
@@ -112,6 +109,7 @@ int main(int argc, char** argv)
         myLastPixel += 1;
     }
     int myImageHeight = myLastPixel - myFirstPixel + 1;
+    printf("%d %d %d\n", myFirstPixel, myLastPixel, myImageHeight);
 
     allocateImage(&inImage, myImageHeight, mainImageWidth);
     allocateImage(&outImage, myImageHeight, mainImageWidth);
@@ -135,8 +133,6 @@ int main(int argc, char** argv)
         MPI_Recv(inImage.data[0], myImageHeight * mainImageWidth, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, &status);
     }
 
-    printf("So far so good %d\n", myRank);
-
     isoDiffusionDenoising(&inImage, &outImage, kappa, iterations, myRank, numProcs);
 
     // Distribute the data from rank 0 to the children
@@ -155,15 +151,6 @@ int main(int argc, char** argv)
         }
         memcpy(mainImage.data[myFirstPixel], outImage.data[0], myImageHeight * mainImageWidth * sizeof(float));
     } else {
-        int myFirstPixel = (int)((myRank * mainImageHeight) / numProcs);
-        int myLastPixel = (int)(((myRank + 1) * mainImageHeight) / numProcs - 1);
-        if(myRank > 0) {
-            myFirstPixel -= 1;
-        }
-        if(myRank < numProcs - 1) {
-            myLastPixel += 1;
-        }
-        int myImageHeight = myLastPixel - myFirstPixel + 1;
         MPI_Send(outImage.data[0], myImageHeight * mainImageWidth, MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
     }
 
@@ -177,6 +164,16 @@ int main(int argc, char** argv)
         }
         export_JPEG_file(outFileName, imageChars, mainImageHeight, mainImageWidth, numComponents, 100);
     }
+    char *myOutFileName[50];
+    sprintf(myOutFileName, "part%d.jpg", myRank);
+    // convert the data into chars
+    for(i = 0; i < outImage.height; i++) {
+        for(j = 0; j < outImage.width; j++) {
+            imageChars[i * outImage.width + j] = (char)(outImage.data[i][j]);
+        }
+    }
+    export_JPEG_file(myOutFileName, imageChars, outImage.height, outImage.width, numComponents, 100);
+
     deallocateImage(&inImage);
     deallocateImage(&outImage);
 
